@@ -24,7 +24,7 @@ nb_probs = naive_bayes.predict_proba(new_data_count)[:, 1]
 ensemble_probs = (rf_probs + lr_probs + nb_probs) / 3
 
 # Convert probabilities to class labels based on a threshold
-ensemble_preds = (ensemble_probs > 0.5).astype(int)
+ensemble_preds = (ensemble_probs > 0.7).astype(int)
 
 if(ensemble_preds == [1]):
     print('Phishing Email Content')
