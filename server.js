@@ -3,15 +3,22 @@ const moment = require('moment'); // Ensure moment is installed
 const app = express();
 const port = 3001;
 const cors = require('cors');
-const { spawn } = require('child_process');
-
+const { spawn, exec } = require('child_process');
+const { NmapScan } = require('node-nmap');
+const nodeNmap = require('node-nmap');
 
 app.use(cors());
 app.use(express.json());
+
+
+
+
+
+
+
 // app.set('trust proxy', true);
 
 let emails = [];
-
 
 let malicious_ips = [
     "45.116.226.110", "42.54.157.107", "103.240.252.246", "45.116.226.108",
@@ -32,34 +39,29 @@ let malicious_ips = [
     "70.166.127.111", "72.26.28.110", "74.143.71.178", "74.208.106.128",
     "76.164.81.224", "76.164.83.49", "76.164.88.234", "92.205.185.52",
     "92.205.237.227", "92.205.31.137", "96.18.75.100", "96.56.93.58",
-    "96.69.48.11", "98.123.127.150", "98.153.117.58", "98.44.138.131", "127.0.0.1"
+    "96.69.48.11", "98.123.127.150", "98.153.117.58", "98.44.138.131", "73.239.243.87"
 ]
 
 
+const maliciousPorts = [
+    4444, 20000, 32768, 32769, 32770, 32771, 32772, 32773, 32774, 32775
+];
 
-
-
+function isAnyPortMalicious(givenPorts) {
+    return givenPorts.some(port => maliciousPorts.includes(port.port));
+}
 
 
 function generateTimeAndTimeStamp() {
     const now = moment();
     const time = now.format('HH.mm'); // e.g., "23.45"
-    const timeStamp = now.format('ddd, DD MMM, HH.mm') + ` (${now.fromNow()})`; // e.g., "Wed, 02 Feb, 23.45 (a few seconds ago)"
+    const timeStamp = now.format('ddd, DD MMM, HH.mm') + ` (${now.fromNow()})`;
     return { time, timeStamp };
 }
 
 function extractDomain(email) {
     return email.split('@')[1];
 }
-
-// function extractIPv4(ip) {
-//     if (ip.startsWith('::ffff:')) {
-//         return ip.replace('::ffff:', '');
-//     }
-//     return ip;
-// }
-
-
 
 
 function runPythonScript(scriptPath, inputData) {
@@ -92,14 +94,56 @@ app.post('/emails', async (req, res) => {
     const combinedText = `${req.body.subject} ${req.body.body}`;
     let fromMail = extractDomain(req.body.fromEmail);
 
-
     let isMaliciousIp = false;
 
-    const clientIp = req.ip;
+    const clientIp = req.body.usersIp;
 
     console.log('client - ip ', clientIp)
 
     console.log('isMaliciousIp : ', isMaliciousIp);
+
+    const command = `sudo nmap -p- ${clientIp}`;
+
+    nodeNmap.nmapLocation = "nmap";
+
+    const target = clientIp;
+    const options = "-p 1-65535";
+
+
+    const portScan = new nodeNmap.QuickScan(target, options);
+
+
+    let maliciousPort = false;
+
+
+    portScan.on('complete', function (data) {
+        console.log(`Scan complete for target: ${target}`);
+
+        console.log('Open port data:', data);
+        data?.forEach(host => {
+            if (host.openPorts && host.openPorts.length > 0) {
+                console.log(`Open ports on ${host.ip}:`);
+                const openPorts = host.openPorts.map(portInfo => portInfo.port); // Extract just the port numbers
+                host.openPorts.forEach(portInfo => {
+                    console.log(`Port ${portInfo.port} (${portInfo.service})`);
+                });
+                // Check if any open ports are malicious
+                if (isAnyPortMalicious(host.openPorts)) {
+                    console.log(`Warning: At least one of the open ports on ${host.ip} is known to be used by malicious software.`);
+                    maliciousPort = true;
+                }
+            } else {
+                console.log(`No open ports found on ${host.ip}.`);
+            }
+        });
+    });
+
+    portScan.on('error', function (error) {
+        console.log(`Error: ${error}`);
+    });
+
+    portScan.startScan();
+
 
     if (malicious_ips.includes(clientIp)) {
         isMaliciousIp = true
@@ -127,18 +171,13 @@ app.post('/emails', async (req, res) => {
         // Handle error silently, proceed with the request
     }
 
-
-    console.log('isMaliciousIp : ', isMaliciousIp);
-
-
     try {
         const [contentResult, domainResult] = await Promise.all([
             runPythonScript('/Users/neerajbaipureddy/Desktop/safeMail/Safe-Mail-BE/application-layer-Content.py', combinedText),
             runPythonScript('/Users/neerajbaipureddy/Desktop/safeMail/Safe-Mail-BE/application-layer-DomainName.py', fromMail)
         ]);
         // Determine if either process flags the email as phishing
-        isPhishing = contentResult === 'Phishing Email Content' || domainResult === 'malicious domain' || isMaliciousIp;
-
+        isPhishing = contentResult === 'Phishing Email Content' || domainResult === 'malicious domain' || isMaliciousIp || maliciousPort;
     } catch (error) {
         console.error('Error running Python scripts:', error);
         return res.status(500).send('Internal server error');
@@ -190,6 +229,10 @@ app.get('/emails', (req, res) => {
     res.status(200).json(sortedEmails);
 });
 
-app.listen(port,'0.0.0.0', () => {
+// app.listen(port,'0.0.0.0', () => {
+//     console.log(`Server running on http://localhost:${port}`);
+// });
+
+app.listen(port, () => {
     console.log(`Server running on http://localhost:${port}`);
 });
